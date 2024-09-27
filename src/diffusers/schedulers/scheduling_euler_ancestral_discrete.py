@@ -18,6 +18,7 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import torch
+import threading
 
 from ..configuration_utils import ConfigMixin, register_to_config
 from ..utils import BaseOutput, logging
@@ -213,9 +214,15 @@ class EulerAncestralDiscreteScheduler(SchedulerMixin, ConfigMixin):
         self.timesteps = torch.from_numpy(timesteps)
         self.is_scale_input_called = False
 
-        self._step_index = None
-        self._begin_index = None
-        self.sigmas = self.sigmas.to("cpu")  # to avoid too much CPU/GPU communication
+        # self._step_index = None
+        # self._begin_index = None
+        # self.sigmas = self.sigmas.to("cpu")  # to avoid too much CPU/GPU communication
+
+        # Initialize threading local storage for step_index and begin_index
+        self._thread_local = threading.local()
+        self._thread_local.step_index = None
+        self._thread_local.begin_index = None
+        self.sigmas = self.sigmas.to("cpu")
 
     @property
     def init_noise_sigma(self):
@@ -225,30 +232,44 @@ class EulerAncestralDiscreteScheduler(SchedulerMixin, ConfigMixin):
 
         return (self.sigmas.max() ** 2 + 1) ** 0.5
 
+    # @property
+    # def step_index(self):
+    #     """
+    #     The index counter for current timestep. It will increase 1 after each scheduler step.
+    #     """
+    #     return self._step_index
+
+    # @property
+    # def begin_index(self):
+    #     """
+    #     The index for the first timestep. It should be set from pipeline with `set_begin_index` method.
+    #     """
+    #     return self._begin_index
+
+    # # Copied from diffusers.schedulers.scheduling_dpmsolver_multistep.DPMSolverMultistepScheduler.set_begin_index
+    # def set_begin_index(self, begin_index: int = 0):
+    #     """
+    #     Sets the begin index for the scheduler. This function should be run from pipeline before the inference.
+
+    #     Args:
+    #         begin_index (`int`):
+    #             The begin index for the scheduler.
+    #     """
+    #     self._begin_index = begin_index
+
+
     @property
     def step_index(self):
-        """
-        The index counter for current timestep. It will increase 1 after each scheduler step.
-        """
-        return self._step_index
+        return self._thread_local.step_index
 
     @property
     def begin_index(self):
-        """
-        The index for the first timestep. It should be set from pipeline with `set_begin_index` method.
-        """
-        return self._begin_index
+        return self._thread_local.begin_index
 
-    # Copied from diffusers.schedulers.scheduling_dpmsolver_multistep.DPMSolverMultistepScheduler.set_begin_index
     def set_begin_index(self, begin_index: int = 0):
-        """
-        Sets the begin index for the scheduler. This function should be run from pipeline before the inference.
+        self._thread_local.begin_index = begin_index
 
-        Args:
-            begin_index (`int`):
-                The begin index for the scheduler.
-        """
-        self._begin_index = begin_index
+
 
     def scale_model_input(self, sample: torch.Tensor, timestep: Union[float, torch.Tensor]) -> torch.Tensor:
         """
@@ -314,8 +335,10 @@ class EulerAncestralDiscreteScheduler(SchedulerMixin, ConfigMixin):
         self.sigmas = torch.from_numpy(sigmas).to(device=device)
 
         self.timesteps = torch.from_numpy(timesteps).to(device=device)
-        self._step_index = None
-        self._begin_index = None
+        # self._step_index = None
+        # self._begin_index = None
+        self._thread_local.step_index = None
+        self._thread_local.begin_index = None
         self.sigmas = self.sigmas.to("cpu")  # to avoid too much CPU/GPU communication
 
     # Copied from diffusers.schedulers.scheduling_euler_discrete.EulerDiscreteScheduler.index_for_timestep
@@ -338,9 +361,11 @@ class EulerAncestralDiscreteScheduler(SchedulerMixin, ConfigMixin):
         if self.begin_index is None:
             if isinstance(timestep, torch.Tensor):
                 timestep = timestep.to(self.timesteps.device)
-            self._step_index = self.index_for_timestep(timestep)
+            # self._step_index = self.index_for_timestep(timestep)
+            self._thread_local.step_index = self.index_for_timestep(timestep)
         else:
-            self._step_index = self._begin_index
+            # self._step_index = self._begin_index
+            self._thread_local.step_index = self._thread_local.begin_index
 
     def step(
         self,
@@ -390,8 +415,8 @@ class EulerAncestralDiscreteScheduler(SchedulerMixin, ConfigMixin):
                 "See `StableDiffusionPipeline` for a usage example."
             )
 
-        if self.step_index is None:
-            self._init_step_index(timestep)
+        # if self.step_index is None:
+        #     self._init_step_index(timestep)
 
         sigma = self.sigmas[self.step_index]
 
@@ -432,7 +457,8 @@ class EulerAncestralDiscreteScheduler(SchedulerMixin, ConfigMixin):
         prev_sample = prev_sample.to(model_output.dtype)
 
         # upon completion increase step index by one
-        self._step_index += 1
+        # self._step_index += 1
+        self._thread_local.step_index += 1
 
         if not return_dict:
             return (prev_sample,)
